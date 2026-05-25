@@ -139,7 +139,7 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
 $summaryFile = Join-Path $LogDir ("cleanup-{0:yyyyMMdd-HHmmss}.summary.txt" -f (Get-Date))
 
 $script:stats = @{ Matched = 0; Deleted = 0; Skipped = 0; Errors = 0; DryRun = 0 }
-$script:perRule = [ordered]@{
+$script:perRuleExpected = [ordered]@{
     'R1' = 0; 'R2' = 0; 'R3' = 0; 'R4' = 0; 'R5' = 0; 'R6' = 0; 'R7' = 0
 }
 $script:perRuleDeleted = [ordered]@{
@@ -148,9 +148,11 @@ $script:perRuleDeleted = [ordered]@{
 $script:perRuleErrors = [ordered]@{
     'R1' = 0; 'R2' = 0; 'R3' = 0; 'R4' = 0; 'R5' = 0; 'R6' = 0; 'R7' = 0
 }
-$script:perRuleDryRun = [ordered]@{
+$script:perRuleResidue = [ordered]@{
     'R1' = 0; 'R2' = 0; 'R3' = 0; 'R4' = 0; 'R5' = 0; 'R6' = 0; 'R7' = 0
 }
+$script:totalExpected = 0
+$script:totalResidue = 0
 
 function Write-Log {
     param([string]$Rule, [string]$Tag, [string]$Message)
@@ -197,21 +199,19 @@ function Remove-ByPattern {
         if ($Cutoff -and $f.LastWriteTime -ge $Cutoff) { continue }
 
         $script:stats.Matched++
-        if ($script:perRule.Contains($Rule)) { $script:perRule[$Rule]++ }
 
         if ($Execute) {
             try {
                 Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
                 $script:stats.Deleted++
-                if ($script:perRuleDeleted.Contains($Rule)) { $script:perRuleDeleted[$Rule]++ }
+                $script:perRuleDeleted[$Rule]++
             } catch {
                 Write-Log -Rule $Rule -Tag 'ERROR' -Message "$($f.FullName) : $($_.Exception.Message)"
                 $script:stats.Errors++
-                if ($script:perRuleErrors.Contains($Rule)) { $script:perRuleErrors[$Rule]++ }
+                $script:perRuleErrors[$Rule]++
             }
         } else {
             $script:stats.DryRun++
-            if ($script:perRuleDryRun.Contains($Rule)) { $script:perRuleDryRun[$Rule]++ }
         }
     }
 
@@ -247,24 +247,45 @@ function Clear-TransitFolder {
         }
 
         $script:stats.Matched++
-        if ($script:perRule.Contains($Rule)) { $script:perRule[$Rule]++ }
         if ($Execute) {
             try {
                 Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
                 $script:stats.Deleted++
-                if ($script:perRuleDeleted.Contains($Rule)) { $script:perRuleDeleted[$Rule]++ }
+                $script:perRuleDeleted[$Rule]++
             } catch {
                 Write-Log -Rule $Rule -Tag 'ERROR' -Message "$($item.FullName) : $($_.Exception.Message)"
                 $script:stats.Errors++
-                if ($script:perRuleErrors.Contains($Rule)) { $script:perRuleErrors[$Rule]++ }
+                $script:perRuleErrors[$Rule]++
             }
         } else {
             $script:stats.DryRun++
-            if ($script:perRuleDryRun.Contains($Rule)) { $script:perRuleDryRun[$Rule]++ }
         }
     }
 
     Write-Progress -Id $progressId -Activity "Regola $Rule (Transit)" -Completed
+}
+
+# Helper per pre-scan e post-scan (re-scan di verifica).
+# Get-MatchCount: stessa logica di Remove-ByPattern ma SOLO conteggio, niente delete.
+function Get-MatchCount {
+    param([string]$Dir, [string[]]$Patterns, [Nullable[datetime]]$Cutoff)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return 0 }
+    if (-not $Patterns -or $Patterns.Count -eq 0) { return 0 }
+    $tot = 0
+    foreach ($p in $Patterns) {
+        $files = @(Get-ChildItem -LiteralPath $Dir -Filter $p -File -ErrorAction SilentlyContinue)
+        if ($null -ne $Cutoff) {
+            $files = @($files | Where-Object { $_.LastWriteTime -lt $Cutoff })
+        }
+        $tot += $files.Count
+    }
+    return $tot
+}
+
+function Get-MatchCountTransit {
+    param([string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return 0 }
+    return @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue).Count
 }
 
 # Reference date: default = oggi. Override via -ReferenceDate.
@@ -341,23 +362,10 @@ if ($Execute) {
     Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Utente ha confermato -Execute"
 }
 
-# R1
-Remove-ByPattern -Rule 'R1' `
-    -Dir (Join-Path $ManufRoot 'EVENTSMANAGER\DATA') `
-    -Patterns @('PosteRestante*.xml') `
-    -Cutoff $sixMonthsAgo
-
-# R2
-Remove-ByPattern -Rule 'R2' `
-    -Dir (Join-Path $ManufRoot 'EVENTSMANAGER\DATA\EVENTS') `
-    -Patterns @('*_NGCEVENTSDATA.xml', '*_NGCEVENTSDATA.bak') `
-    -Cutoff $sixMonthsAgo
-
-# R3 — host detection
+# R3 — host detection (eseguita PRIMA della costruzione del rules plan)
 # Priorita':
 #   1. -Hostname esplicito
-#   2. Auto-detect dai filename "REPORTING_<host>_Counters*.xml" in MarkerStore
-#      + controprova con sottocartella omonima
+#   2. Auto-detect: prima sottocartella alfabetica di MarkerStore (con controprova Counters)
 #   3. Fallback: 1 sola sottocartella MarkerStore -> usa quella
 #   4. Fallback: MarkerStore vuota -> $env:COMPUTERNAME
 $markerStoreRoot = Join-Path $ManufRoot 'EVENTSMANAGER\DATA\MARKERSTORE'
@@ -368,7 +376,6 @@ if (Test-Path -LiteralPath $markerStoreRoot -PathType Container) {
     $hostNames = @($hostDirs | ForEach-Object { $_.Name })
 
     if ($Hostname) {
-        # override esplicito
         $match = $hostDirs | Where-Object { $_.Name -ieq $Hostname }
         if ($match) {
             $r3Targets += $match.FullName
@@ -377,14 +384,11 @@ if (Test-Path -LiteralPath $markerStoreRoot -PathType Container) {
             Write-Log -Rule 'R3' -Tag 'WARN' -Message "Hostname '$Hostname' non trovato in MarkerStore. Host disponibili: $($hostNames -join ', ')"
         }
     } else {
-        # Step 1: scegli prima sottocartella host (ordinata alfabeticamente)
-        # Es. MarkerStore = { FAIQ50-768000, Vector-IQ50 } -> picka FAIQ50-768000
         if ($hostDirs.Count -gt 0) {
             $sortedDirs = $hostDirs | Sort-Object Name
             $picked = $sortedDirs[0]
             $r3Targets += $picked.FullName
 
-            # Controprova: esistono file "REPORTING_<host>_Counters*.xml" in MarkerStore root?
             $counterMatch = @(Get-ChildItem -LiteralPath $markerStoreRoot -Filter "REPORTING_$($picked.Name)_Counters*.xml" -File -ErrorAction SilentlyContinue)
             $counterTag = if ($counterMatch.Count -gt 0) { "controprova Counters OK ($($counterMatch.Count) file)" } else { "controprova Counters assente" }
 
@@ -396,59 +400,76 @@ if (Test-Path -LiteralPath $markerStoreRoot -PathType Container) {
             }
         }
 
-        # Step 2: se step 1 non ha riempito $r3Targets, prova fallback su sottocartelle
         if ($r3Targets.Count -eq 0) {
-            if ($hostDirs.Count -eq 1) {
-                $r3Targets += $hostDirs[0].FullName
-                Write-Log -Rule 'R3' -Tag 'INFO' -Message "Fallback: 1 sola sottocartella MarkerStore: $($hostNames[0])"
-            } elseif ($hostDirs.Count -gt 1) {
-                throw "MarkerStore contiene $($hostDirs.Count) sottocartelle host: $($hostNames -join ', '). Nessun file REPORTING_*_Counters*.xml per disambiguare. Passa -Hostname esplicito."
-            } else {
-                $fallback = Join-Path $markerStoreRoot $env:COMPUTERNAME
-                Write-Log -Rule 'R3' -Tag 'WARN' -Message "MarkerStore vuota. Fallback su `$env:COMPUTERNAME = $env:COMPUTERNAME"
-                $r3Targets += $fallback
-            }
+            $fallback = Join-Path $markerStoreRoot $env:COMPUTERNAME
+            Write-Log -Rule 'R3' -Tag 'WARN' -Message "MarkerStore vuota. Fallback su `$env:COMPUTERNAME = $env:COMPUTERNAME"
+            $r3Targets += $fallback
         }
     }
 } else {
     Write-Log -Rule 'R3' -Tag 'SKIP' -Message "path non trovato: $markerStoreRoot"
-    $script:stats.Skipped++
 }
 
 $script:resolvedHostnames = @($r3Targets | ForEach-Object { Split-Path -Leaf $_ })
 
-foreach ($t in $r3Targets) {
-    Remove-ByPattern -Rule 'R3' `
-        -Dir $t `
-        -Patterns @('Reporting*.xml') `
-        -Cutoff $sixMonthsAgo
+# Rules plan: dati centralizzati per pre-scan, apply, post-scan.
+$r3Dir = if ($r3Targets.Count -gt 0) { $r3Targets[0] } else { $null }
+$r7Patterns = if ($resolvedSerial) { @("$resolvedSerial*.zip") } else { @() }
+$rulesPlan = @(
+    [pscustomobject]@{ Id='R1'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA');         Patterns=@('PosteRestante*.xml');                       Cutoff=$sixMonthsAgo; Mode='Pattern' },
+    [pscustomobject]@{ Id='R2'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\EVENTS');  Patterns=@('*_NGCEVENTSDATA.xml','*_NGCEVENTSDATA.bak'); Cutoff=$sixMonthsAgo; Mode='Pattern' },
+    [pscustomobject]@{ Id='R3'; Dir=$r3Dir;                                              Patterns=@('Reporting*.xml');                           Cutoff=$sixMonthsAgo; Mode='Pattern' },
+    [pscustomobject]@{ Id='R4'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\TRANSIT'); Patterns=@();                                           Cutoff=$null;         Mode='Transit' },
+    [pscustomobject]@{ Id='R5'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\LAPOSTE');         Patterns=@('PosteRestante_pilot*.xml');                 Cutoff=$sixMonthsAgo; Mode='Pattern' },
+    [pscustomobject]@{ Id='R6'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\REPORT');          Patterns=@('Reporting*.xml','session*.xml');            Cutoff=$sixMonthsAgo; Mode='Pattern' },
+    [pscustomobject]@{ Id='R7'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\ROUTINE');         Patterns=$r7Patterns;                                   Cutoff=$oneWeekAgo;   Mode='Pattern' }
+)
+
+# PRE-SCAN: calcolo atteso per ogni regola PRIMA di applicare.
+foreach ($rule in $rulesPlan) {
+    if (-not $rule.Dir) { $script:perRuleExpected[$rule.Id] = 0; continue }
+    if ($rule.Mode -eq 'Transit') {
+        $script:perRuleExpected[$rule.Id] = Get-MatchCountTransit -Dir $rule.Dir
+    } else {
+        $script:perRuleExpected[$rule.Id] = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff
+    }
+}
+$script:totalExpected = ($script:perRuleExpected.Values | Measure-Object -Sum).Sum
+Write-Log -Rule '---' -Tag 'PRESCAN' -Message ("Atteso totale: {0} file" -f $script:totalExpected)
+
+# APPLY: esegui ogni regola.
+foreach ($rule in $rulesPlan) {
+    if (-not $rule.Dir) {
+        Write-Log -Rule $rule.Id -Tag 'SKIP' -Message "regola saltata (path/host non risolti)."
+        $script:stats.Skipped++
+        continue
+    }
+    if ($rule.Mode -eq 'Transit') {
+        Clear-TransitFolder -Rule $rule.Id -Dir $rule.Dir
+    } else {
+        if (-not $rule.Patterns -or $rule.Patterns.Count -eq 0) {
+            Write-Log -Rule $rule.Id -Tag 'SKIP' -Message "regola saltata (nessun pattern, es. seriale non risolto)."
+            $script:stats.Skipped++
+            continue
+        }
+        Remove-ByPattern -Rule $rule.Id -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff
+    }
 }
 
-# R4 — TRANSIT: tutto, sempre
-Clear-TransitFolder -Rule 'R4' `
-    -Dir (Join-Path $ManufRoot 'EVENTSMANAGER\DATA\TRANSIT')
-
-# R5
-Remove-ByPattern -Rule 'R5' `
-    -Dir (Join-Path $ManufRoot 'PILOT\DATA\LAPOSTE') `
-    -Patterns @('PosteRestante_pilot*.xml') `
-    -Cutoff $sixMonthsAgo
-
-# R6
-Remove-ByPattern -Rule 'R6' `
-    -Dir (Join-Path $ManufRoot 'PILOT\DATA\REPORT') `
-    -Patterns @('Reporting*.xml', 'session*.xml') `
-    -Cutoff $sixMonthsAgo
-
-# R7 — ROUTINE: tutti i zip del seriale tranne ultima settimana
-if ($resolvedSerial) {
-    Remove-ByPattern -Rule 'R7' `
-        -Dir (Join-Path $ManufRoot 'PILOT\DATA\ROUTINE') `
-        -Patterns @("$resolvedSerial*.zip") `
-        -Cutoff $oneWeekAgo
-} else {
-    Write-Log -Rule 'R7' -Tag 'SKIP' -Message "Seriale non risolto, R7 saltato."
-    $script:stats.Skipped++
+# POST-SCAN (solo execute): re-scan con gli stessi criteri per verificare residuo.
+# Verifica genuina: se residuo > 0, qualcosa e' sfuggito (race, pattern incompleto, delete silently failed).
+if ($Execute) {
+    foreach ($rule in $rulesPlan) {
+        if (-not $rule.Dir) { $script:perRuleResidue[$rule.Id] = 0; continue }
+        if ($rule.Mode -eq 'Transit') {
+            $script:perRuleResidue[$rule.Id] = Get-MatchCountTransit -Dir $rule.Dir
+        } else {
+            if (-not $rule.Patterns -or $rule.Patterns.Count -eq 0) { $script:perRuleResidue[$rule.Id] = 0; continue }
+            $script:perRuleResidue[$rule.Id] = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff
+        }
+    }
+    $script:totalResidue = ($script:perRuleResidue.Values | Measure-Object -Sum).Sum
+    Write-Log -Rule '---' -Tag 'POSTSCAN' -Message ("Residuo totale: {0} file" -f $script:totalResidue)
 }
 
 Write-Log -Rule '---' -Tag 'SUMMARY' -Message ("Matched={0} Deleted={1} DryRun={2} Skipped={3} Errors={4}" -f `
@@ -487,31 +508,39 @@ if ($script:resolvedHostnames -and $script:resolvedHostnames.Count -gt 0) {
 }
 [void]$sb.AppendLine("")
 
-$actualMap = if ($Execute) { $script:perRuleDeleted } else { $script:perRuleDryRun }
-$actualLabel = if ($Execute) { 'cancellati' } else { ' simulati' }
-[void]$sb.AppendLine(" Risultato per regola (atteso = file trovati dallo scan):")
-foreach ($r in $script:perRule.Keys) {
-    $atteso = $script:perRule[$r]
-    $effettivo = $actualMap[$r]
-    $errori = $script:perRuleErrors[$r]
-    $delta = $effettivo - $atteso
-    $deltaStr = if ($delta -gt 0) { "+$delta" } else { "$delta" }
-    [void]$sb.AppendLine(("   {0}  {1}  atteso {2,6}  {3} {4,6}  errori {5,3}  delta {6,5}" -f `
-        $r, $ruleDescriptions[$r].PadRight(54), $atteso, $actualLabel, $effettivo, $errori, $deltaStr))
-}
-[void]$sb.AppendLine("")
-$totAtteso = $script:stats.Matched
-$totEffettivo = if ($Execute) { $script:stats.Deleted } else { $script:stats.DryRun }
-$totErrori = $script:stats.Errors
-$totDelta = $totEffettivo - $totAtteso
-$totDeltaStr = if ($totDelta -gt 0) { "+$totDelta" } else { "$totDelta" }
-[void]$sb.AppendLine((" TOTALE  atteso {0}   {1} {2}   errori {3}   delta {4}" -f $totAtteso, $actualLabel.Trim(), $totEffettivo, $totErrori, $totDeltaStr))
-$esito = if ($totErrori -eq 0 -and $totDelta -eq 0) {
-    'OK (atteso == effettivo, nessun errore)'
+if ($Execute) {
+    [void]$sb.AppendLine(" Risultato per regola (atteso=pre-scan, cancellati=delete OK, residuo=post-scan):")
+    foreach ($r in $script:perRuleExpected.Keys) {
+        $atteso     = [int]$script:perRuleExpected[$r]
+        $cancellati = [int]$script:perRuleDeleted[$r]
+        $residuo    = [int]$script:perRuleResidue[$r]
+        $errori     = [int]$script:perRuleErrors[$r]
+        $verdict = if ($cancellati -eq $atteso -and $residuo -eq 0 -and $errori -eq 0) { '[OK]' } else { '[KO]' }
+        [void]$sb.AppendLine(("   {0}  {1}  atteso {2,6}  cancellati {3,6}  residuo {4,4}  errori {5,3}  {6}" -f `
+            $r, $ruleDescriptions[$r].PadRight(54), $atteso, $cancellati, $residuo, $errori, $verdict))
+    }
+    [void]$sb.AppendLine("")
+    $totAtteso     = [int]$script:totalExpected
+    $totCancellati = [int]$script:stats.Deleted
+    $totResiduo    = [int]$script:totalResidue
+    $totErrori     = [int]$script:stats.Errors
+    [void]$sb.AppendLine((" TOTALE  atteso {0}   cancellati {1}   residuo {2}   errori {3}" -f $totAtteso, $totCancellati, $totResiduo, $totErrori))
+    $esitoOk = ($totCancellati -eq $totAtteso) -and ($totResiduo -eq 0) -and ($totErrori -eq 0)
+    if ($esitoOk) {
+        [void]$sb.AppendLine(" ESITO   OK (cancellati == atteso && residuo == 0 && errori == 0)")
+    } else {
+        [void]$sb.AppendLine((" ESITO   KO (cancellati {0}/{1}, residuo {2}, errori {3})" -f $totCancellati, $totAtteso, $totResiduo, $totErrori))
+    }
 } else {
-    "KO (atteso $totAtteso, effettivo $totEffettivo, errori $totErrori, delta $totDeltaStr)"
+    [void]$sb.AppendLine(" Anteprima per regola (file che sarebbero cancellati):")
+    foreach ($r in $script:perRuleExpected.Keys) {
+        $atteso = [int]$script:perRuleExpected[$r]
+        [void]$sb.AppendLine(("   {0}  {1}  trovati {2,6}" -f $r, $ruleDescriptions[$r].PadRight(54), $atteso))
+    }
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine((" TOTALE  trovati {0} file" -f [int]$script:totalExpected))
+    [void]$sb.AppendLine(" NOTA    in dry-run nessuna verifica reale. Esito disponibile solo con -Execute (post-scan).")
 }
-[void]$sb.AppendLine((" ESITO   {0}" -f $esito))
 [void]$sb.AppendLine((" Saltati : {0} cartelle/pattern" -f $script:stats.Skipped))
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine(" Summary: $summaryFile")
@@ -525,26 +554,31 @@ Write-Host ""
 Write-Host ($sb.ToString())
 Write-Host ""
 
-$bAtteso = $script:stats.Matched
-$bEffettivo = if ($Execute) { $script:stats.Deleted } else { $script:stats.DryRun }
-$bDelta = $bEffettivo - $bAtteso
-$bDeltaStr = if ($bDelta -gt 0) { "+$bDelta" } else { "$bDelta" }
-$bColor = if ($script:stats.Errors -eq 0 -and $bDelta -eq 0) { 'Green' } else { 'Red' }
+$bAtteso  = [int]$script:totalExpected
+$bErrori  = [int]$script:stats.Errors
 
-Write-Host "==============================================================" -ForegroundColor $bColor
 if ($Execute) {
-    Write-Host (" EXECUTE: atteso {0}  cancellati {1}  errori {2}  delta {3}" -f $bAtteso, $bEffettivo, $script:stats.Errors, $bDeltaStr) -ForegroundColor $bColor
+    $bCancellati = [int]$script:stats.Deleted
+    $bResiduo    = [int]$script:totalResidue
+    $bOk = ($bCancellati -eq $bAtteso) -and ($bResiduo -eq 0) -and ($bErrori -eq 0)
+    $bColor = if ($bOk) { 'Green' } else { 'Red' }
+    Write-Host "==============================================================" -ForegroundColor $bColor
+    Write-Host (" EXECUTE: atteso {0} / cancellati {1} / residuo {2} / errori {3}" -f $bAtteso, $bCancellati, $bResiduo, $bErrori) -ForegroundColor $bColor
+    if ($bOk) {
+        Write-Host " ESITO: OK (cancellati == atteso, residuo == 0, nessun errore)" -ForegroundColor Green
+    } else {
+        Write-Host " ESITO: KO -- vedere summary per dettagli per regola" -ForegroundColor Red
+        $exitCode = 1
+    }
+    Write-Host " Summary: $summaryFile" -ForegroundColor $bColor
+    Write-Host "==============================================================" -ForegroundColor $bColor
 } else {
-    Write-Host (" DRY-RUN: atteso {0}  simulati {1}  delta {2}  (nessuna cancellazione)" -f $bAtteso, $bEffettivo, $bDeltaStr) -ForegroundColor $bColor
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host (" DRY-RUN: {0} file candidati alla cancellazione. NESSUNA cancellazione eseguita." -f $bAtteso) -ForegroundColor Cyan
+    Write-Host " Verifica reale (re-scan post-cancellazione) solo con -Execute." -ForegroundColor Cyan
+    Write-Host " Summary: $summaryFile" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
 }
-if ($script:stats.Errors -eq 0 -and $bDelta -eq 0) {
-    Write-Host " ESITO: OK (atteso == effettivo)" -ForegroundColor Green
-} else {
-    Write-Host (" ESITO: KO  errori={0}  delta={1}" -f $script:stats.Errors, $bDeltaStr) -ForegroundColor Red
-    $exitCode = 1
-}
-Write-Host " Summary: $summaryFile" -ForegroundColor $bColor
-Write-Host "==============================================================" -ForegroundColor $bColor
 
 } catch {
     Write-Host ""

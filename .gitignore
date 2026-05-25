@@ -1,6 +1,7 @@
 # Dati di test esclusi (307MB ciascuno)
 /Manuf/
 /Manuf_template/
+/Manuf_template - Copia/
 
 # Artefatti runtime
 _cleanup-logs/
