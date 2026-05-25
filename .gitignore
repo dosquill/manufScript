@@ -1,0 +1,13 @@
+# Dati di test esclusi (307MB ciascuno)
+/Manuf/
+/Manuf_template/
+
+# Artefatti runtime
+_cleanup-logs/
+*.log
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
