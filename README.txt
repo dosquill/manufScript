@@ -72,12 +72,24 @@
  AGGIORNAMENTO DELLO SCRIPT
  --------------------------
  Doppio-click su  update.bat
- Scarica l'ultima versione di Cleanup-Manuf.ps1 da GitHub.
- La versione precedente viene salvata come Cleanup-Manuf.ps1.bak
- (utile per rollback in caso di problemi).
+ Scarica lo zip dell'ultima versione del repo da GitHub (branch main)
+ e sostituisce TUTTI i file locali (Cleanup-Manuf.ps1, start.bat,
+ start-test.bat, README.txt, RegoleCancellazione.docx e update.bat
+ stesso). Funziona come un "git pull" semplificato.
 
- Serve una connessione internet attiva. Se il download fallisce, lo
- script lascia il file corrente intatto e segnala l'errore.
+ Una copia di tutti i file pre-aggiornamento viene salvata in:
+   _pre-update-backup-<data-ora>\
+ utile per rollback se qualcosa va storto.
+
+ Serve una connessione internet attiva. Se il download fallisce, i
+ file locali NON vengono modificati.
+
+ Note tecniche (per sviluppatori):
+ - L'update si gestisce in due tempi: il .bat lancia uno script
+   PowerShell temporaneo in una finestra separata e si chiude
+   immediatamente, cosi' lo script puo' sovrascrivere anche update.bat
+   stesso (un .bat in esecuzione non puo' modificare se stesso).
+ - Lo zip viene scaricato in %TEMP% e cancellato a fine update.
 
 
  LOG E SUMMARY
