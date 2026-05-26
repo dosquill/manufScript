@@ -82,7 +82,7 @@
 
  LOG E SUMMARY
  -------------
- Ogni esecuzione produce due file in  _cleanup-logs\  :
+ Ogni esecuzione produce due file in  Logs\  :
    cleanup-<data-ora>.summary.txt   (esito leggibile da uomo)
    cleanup-<data-ora>.robocopy.log  (dettaglio del backup)
 

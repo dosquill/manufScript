@@ -59,7 +59,7 @@ if ($manufLeaf -inotmatch '^Manuf$') {
 # Hostname runtime (chiesto al sistema, non input utente)
 $hostname = $env:COMPUTERNAME
 
-if (-not $LogDir) { $LogDir = Join-Path $PSScriptRoot '_cleanup-logs' }
+if (-not $LogDir) { $LogDir = Join-Path $PSScriptRoot 'Logs' }
 if (-not (Test-Path -LiteralPath $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }

@@ -1,11 +1,14 @@
-# Dati di test esclusi (307MB ciascuno)
-/Manuf/
-/Manuf_template/
-/Manuf_template - Copia/
+# Dati di test (Manuf, Manuf_template e simili, ~307MB ciascuno)
+/Data/
 
-# Artefatti runtime
+# Artefatti runtime (log esecuzioni script)
+/Logs/
 _cleanup-logs/
 *.log
+
+# Backup creati dallo script
+Manuf_backup_*/
+*.bak
 
 # OS / editor
 Thumbs.db
