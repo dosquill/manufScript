@@ -12,9 +12,12 @@ param(
     [string]$LogDir
 )
 
-# Menu interattivo solo se nessun parametro passato (es. doppio-click).
-# Tutti gli input "operativi" (path/seriale/host) sono auto: zero input utente per evitare typo.
-if ($PSBoundParameters.Count -eq 0) {
+# Menu interattivo se -Execute NON e' stato passato esplicitamente.
+# Trigger anche con altri parametri (es. -ManufRoot via start-test.bat): l'utente
+# sceglie comunque dry-run vs execute via menu. Per saltare il menu da CLI:
+#   powershell -File ... -Execute        -> esecuzione diretta
+#   powershell -File ... -Execute:$false -> dry-run diretto
+if (-not $PSBoundParameters.ContainsKey('Execute')) {
     Write-Host ""
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host " Cleanup Manuf - modalita' interattiva" -ForegroundColor Cyan
