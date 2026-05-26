@@ -313,7 +313,7 @@ if (Test-Path -LiteralPath $routineDir -PathType Container) {
         if ($prefixes.Count -eq 1) {
             $resolvedSerial = $prefixes[0]
         } else {
-            throw "Auto-detect seriale: trovati $($prefixes.Count) prefissi diversi in Routine ($($prefixes -join ', ')). Atteso 1 solo seriale per host. Possibile data corruption — verificare manualmente."
+            throw "Auto-detect seriale: trovati $($prefixes.Count) prefissi diversi in Routine ($($prefixes -join ', ')). Atteso 1 solo seriale per host. Possibile data corruption - verificare manualmente."
         }
     }
 }
