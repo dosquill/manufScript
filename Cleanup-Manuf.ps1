@@ -9,7 +9,10 @@ param(
     [switch]$Execute,
     [string]$BackupDir,
     [switch]$NoBackup,
-    [string]$LogDir
+    [string]$LogDir,
+    # Flag interno: settato quando lo script si rilancia da solo dopo un dry-run
+    # confermato dall'utente, per saltare la conferma 'SI' duplicata.
+    [switch]$PostDryRun
 )
 
 # Menu interattivo se -Execute NON e' stato passato esplicitamente.
@@ -113,7 +116,8 @@ function Remove-ByPattern {
         [string[]]$Patterns,
         [Nullable[datetime]]$Cutoff,
         [Nullable[datetime]]$KeepStart,
-        [Nullable[datetime]]$KeepEnd
+        [Nullable[datetime]]$KeepEnd,
+        [switch]$Recurse
     )
 
     if (-not (Test-Path -LiteralPath $Dir -PathType Container)) {
@@ -125,7 +129,7 @@ function Remove-ByPattern {
     $files = @()
     foreach ($pattern in $Patterns) {
         try {
-            $found = Get-ChildItem -LiteralPath $Dir -Filter $pattern -File -ErrorAction Stop
+            $found = Get-ChildItem -LiteralPath $Dir -Filter $pattern -File -Recurse:$Recurse -ErrorAction Stop
             if ($found) { $files += $found }
         } catch {
             Write-Log -Rule $Rule -Tag 'ERROR' -Message "Get-ChildItem fallito su $Dir con pattern $pattern : $($_.Exception.Message)"
@@ -221,13 +225,14 @@ function Get-MatchCount {
         [string[]]$Patterns,
         [Nullable[datetime]]$Cutoff,
         [Nullable[datetime]]$KeepStart,
-        [Nullable[datetime]]$KeepEnd
+        [Nullable[datetime]]$KeepEnd,
+        [switch]$Recurse
     )
     if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return 0 }
     if (-not $Patterns -or $Patterns.Count -eq 0) { return 0 }
     $tot = 0
     foreach ($p in $Patterns) {
-        $files = @(Get-ChildItem -LiteralPath $Dir -Filter $p -File -ErrorAction SilentlyContinue)
+        $files = @(Get-ChildItem -LiteralPath $Dir -Filter $p -File -Recurse:$Recurse -ErrorAction SilentlyContinue)
         $files = @($files | Where-Object {
             Test-ShouldDelete -When $_.LastWriteTime -KeepStart $KeepStart -KeepEnd $KeepEnd -Cutoff $Cutoff
         })
@@ -369,21 +374,26 @@ Write-Log -Rule '---' -Tag 'MARKER'    -Message ("MarkerStore hosts: {0}" -f $ma
 
 # Conferma -Execute
 if ($Execute) {
-    Write-Host "==============================================================" -ForegroundColor Yellow
-    Write-Host " MODALITA' -EXECUTE: cancellazione PERMANENTE (no Cestino)" -ForegroundColor Yellow
-    if (-not $NoBackup) {
-        Write-Host (" Backup automatico in: {0}" -f $BackupDir) -ForegroundColor Yellow
+    if ($PostDryRun) {
+        # L'utente ha gia' confermato dopo il dry-run nello stesso flusso, salta la doppia conferma.
+        Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Esecuzione confermata via dry-run preview (PostDryRun)"
     } else {
-        Write-Host " ATTENZIONE: backup DISABILITATO (-NoBackup)" -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host " MODALITA' -EXECUTE: cancellazione PERMANENTE (no Cestino)" -ForegroundColor Yellow
+        if (-not $NoBackup) {
+            Write-Host (" Backup automatico in: {0}" -f $BackupDir) -ForegroundColor Yellow
+        } else {
+            Write-Host " ATTENZIONE: backup DISABILITATO (-NoBackup)" -ForegroundColor Red
+        }
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        $confirm = Read-Host "Confermare la cancellazione? Scrivere 'SI' (qualsiasi altra risposta annulla)"
+        if ($confirm -cne 'SI') {
+            Write-Log -Rule '---' -Tag 'ABORT' -Message "Esecuzione annullata dall'utente (risposta: '$confirm')"
+            Write-Host "Esecuzione annullata." -ForegroundColor Cyan
+            return
+        }
+        Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Utente ha confermato -Execute"
     }
-    Write-Host "==============================================================" -ForegroundColor Yellow
-    $confirm = Read-Host "Confermare la cancellazione? Scrivere 'SI' (qualsiasi altra risposta annulla)"
-    if ($confirm -cne 'SI') {
-        Write-Log -Rule '---' -Tag 'ABORT' -Message "Esecuzione annullata dall'utente (risposta: '$confirm')"
-        Write-Host "Esecuzione annullata." -ForegroundColor Cyan
-        return
-    }
-    Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Utente ha confermato -Execute"
 }
 
 # Backup pre-esecuzione (solo -Execute, opt-out con -NoBackup)
@@ -417,15 +427,17 @@ $rangeEnd   = if ($useRange) { $keepEndDate }   else { $null }
 $r7Patterns = if ($resolvedSerial) { @("$resolvedSerial*.zip") } else { @() }
 
 $rulesPlan = @()
-$rulesPlan += [pscustomobject]@{ Id='R1'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA');         Patterns=@('PosteRestante*.xml');                       Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern' }
-$rulesPlan += [pscustomobject]@{ Id='R2'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\EVENTS');  Patterns=@('*_NGCEVENTSDATA.xml','*_NGCEVENTSDATA.bak'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern' }
+$rulesPlan += [pscustomobject]@{ Id='R1'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA');         Patterns=@('PosteRestante*.xml');                       Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
+$rulesPlan += [pscustomobject]@{ Id='R2'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\EVENTS');  Patterns=@('*_NGCEVENTSDATA.xml','*_NGCEVENTSDATA.bak'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
 foreach ($h in $markerStoreHosts) {
-    $rulesPlan += [pscustomobject]@{ Id='R3'; Dir=$h.FullName; Patterns=@('Reporting*.xml'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern' }
+    # R3 e' ricorsivo: ogni cartella host puo' avere subdirectory (Photo, ecc.)
+    # che contengono altri Reporting*.xml. La regola si applica a tutto l'albero.
+    $rulesPlan += [pscustomobject]@{ Id='R3'; Dir=$h.FullName; Patterns=@('Reporting*.xml'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$true }
 }
-$rulesPlan += [pscustomobject]@{ Id='R4'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\TRANSIT'); Patterns=@();                                           Cutoff=$null;         KeepStart=$null;       KeepEnd=$null;     Mode='Transit' }
-$rulesPlan += [pscustomobject]@{ Id='R5'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\LAPOSTE');         Patterns=@('PosteRestante_pilot*.xml');                 Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern' }
-$rulesPlan += [pscustomobject]@{ Id='R6'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\REPORT');          Patterns=@('Reporting*.xml','session*.xml');            Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern' }
-$rulesPlan += [pscustomobject]@{ Id='R7'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\ROUTINE');         Patterns=$r7Patterns;                                   Cutoff=$oneWeekAgo;   KeepStart=$null;       KeepEnd=$null;     Mode='Pattern' }
+$rulesPlan += [pscustomobject]@{ Id='R4'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\TRANSIT'); Patterns=@();                                           Cutoff=$null;         KeepStart=$null;       KeepEnd=$null;     Mode='Transit'; Recurse=$false }
+$rulesPlan += [pscustomobject]@{ Id='R5'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\LAPOSTE');         Patterns=@('PosteRestante_pilot*.xml');                 Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
+$rulesPlan += [pscustomobject]@{ Id='R6'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\REPORT');          Patterns=@('Reporting*.xml','session*.xml');            Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
+$rulesPlan += [pscustomobject]@{ Id='R7'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\ROUTINE');         Patterns=$r7Patterns;                                   Cutoff=$oneWeekAgo;   KeepStart=$null;       KeepEnd=$null;     Mode='Pattern'; Recurse=$false }
 
 # Avviso esplicito se MarkerStore vuota / inesistente
 if ($markerStoreHosts.Count -eq 0) {
@@ -440,7 +452,7 @@ foreach ($rule in $rulesPlan) {
     if ($rule.Mode -eq 'Transit') {
         $script:perRuleExpected[$rule.Id] = Get-MatchCountTransit -Dir $rule.Dir
     } else {
-        $cnt = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd
+        $cnt = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd -Recurse:$rule.Recurse
         $script:perRuleExpected[$rule.Id] = [int]$script:perRuleExpected[$rule.Id] + [int]$cnt
     }
 }
@@ -462,7 +474,7 @@ foreach ($rule in $rulesPlan) {
             $script:stats.Skipped++
             continue
         }
-        Remove-ByPattern -Rule $rule.Id -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd
+        Remove-ByPattern -Rule $rule.Id -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd -Recurse:$rule.Recurse
     }
 }
 
@@ -475,7 +487,7 @@ if ($Execute) {
             $script:perRuleResidue[$rule.Id] = Get-MatchCountTransit -Dir $rule.Dir
         } else {
             if (-not $rule.Patterns -or $rule.Patterns.Count -eq 0) { continue }
-            $cnt = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd
+            $cnt = Get-MatchCount -Dir $rule.Dir -Patterns $rule.Patterns -Cutoff $rule.Cutoff -KeepStart $rule.KeepStart -KeepEnd $rule.KeepEnd -Recurse:$rule.Recurse
             $script:perRuleResidue[$rule.Id] = [int]$script:perRuleResidue[$rule.Id] + [int]$cnt
         }
     }
@@ -638,9 +650,48 @@ if ($Execute) {
 } else {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host (" DRY-RUN: {0} file candidati alla cancellazione. NESSUNA cancellazione eseguita." -f $bAtteso) -ForegroundColor Cyan
-    Write-Host " Verifica reale (re-scan post-cancellazione) solo con -Execute." -ForegroundColor Cyan
     Write-Host " Summary: $summaryFile" -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
+
+    # Prompt post-dry-run: chiedi se procedere con la cancellazione reale.
+    # Se l'utente conferma, lo script si rilancia da solo con gli stessi parametri
+    # piu' -Execute -PostDryRun (per saltare la conferma 'SI' duplicata).
+    Write-Host ""
+    Write-Host "==============================================================" -ForegroundColor Yellow
+    Write-Host " Vuoi procedere con la CANCELLAZIONE REALE adesso?" -ForegroundColor Yellow
+    if (-not $NoBackup) {
+        Write-Host " (verra' creato automaticamente il backup completo prima)" -ForegroundColor Yellow
+    } else {
+        Write-Host " (ATTENZIONE: backup DISABILITATO via -NoBackup)" -ForegroundColor Red
+    }
+    Write-Host "==============================================================" -ForegroundColor Yellow
+    $proceed = Read-Host "Procedere? Scrivere 'SI' (qualsiasi altra risposta termina senza cancellare)"
+    if ($proceed -ceq 'SI') {
+        Write-Log -Rule '---' -Tag 'PROCEED' -Message "Utente ha confermato execute via dry-run preview. Rilancio in modalita' execute."
+        Write-Host ""
+        Write-Host "Rilancio in modalita' EXECUTE..." -ForegroundColor Cyan
+
+        # Costruisci la lista argomenti riportando i parametri originali, senza -Execute,
+        # e aggiungendo -Execute -PostDryRun.
+        $childArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath)
+        foreach ($k in $PSBoundParameters.Keys) {
+            if ($k -eq 'Execute' -or $k -eq 'PostDryRun') { continue }
+            $v = $PSBoundParameters[$k]
+            if ($v -is [switch]) {
+                if ($v.IsPresent) { $childArgs += "-$k" }
+            } else {
+                $childArgs += "-$k", "$v"
+            }
+        }
+        $childArgs += '-Execute'
+        $childArgs += '-PostDryRun'
+
+        & powershell.exe @childArgs
+        $exitCode = $LASTEXITCODE
+    } else {
+        Write-Log -Rule '---' -Tag 'END' -Message "Utente non ha proseguito con execute dopo dry-run."
+        Write-Host "Nessuna cancellazione effettuata. Uscita." -ForegroundColor Cyan
+    }
 }
 
 } catch {
