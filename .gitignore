@@ -12,3 +12,6 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# Microsoft Office lock files
+~$*
