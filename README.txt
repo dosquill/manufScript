@@ -19,18 +19,62 @@
    3. Esci
 
 
- LE 7 REGOLE
- -----------
- R1  EventsManager\Data\PosteRestante*.xml                > 6 mesi
- R2  EventsManager\Data\Events\*_NgcEventsData*           > 6 mesi
- R3  EventsManager\Data\MarkerStore\<host>\Reporting*.xml > 6 mesi
-     (applicato a TUTTI gli host presenti in MarkerStore,
-      utile quando il PC ha cambiato hostname nel tempo)
- R4  EventsManager\Data\Transit\*                         sempre
- R5  Pilot\Data\LaPoste\PosteRestante_pilot*.xml          > 6 mesi
- R6  Pilot\Data\Report\Reporting*.xml + session*.xml      > 6 mesi
- R7  Pilot\Data\Routine\<serial>*.zip                     > 7 giorni
-     (il seriale e' rilevato automaticamente dai file ZIP)
+ REGOLE DI CANCELLAZIONE
+ -----------------------
+ Fonte originale: documento "FILE DA CANCELLARE NELLA CARTELLA MANUF"
+ (anche presente come RegoleCancellazione.docx nella stessa cartella).
+
+ Specifica originale (testuale, dal documento cliente):
+
+   \EVENTSMANAGER\DATA\(PosteRestante*.xml)                 (rif. data)
+   \EVENTSMANAGER\DATA\EVENTS\(*_NGCEVENTSDATA.xml;
+                               *_NGCEVENTSDATA.bak)         (rif. data)
+   \EVENTSMANAGER\DATA\MARKERSTORE\(nome host)\
+                                  (Reporting*.xml)          (rif. data)
+   \EVENTSMANAGER\DATA\TRANSIT\*.*                          (sempre)
+    PILOT\DATA\LAPOSTE\(PosteRestante_pilot*.xml)           (rif. data)
+    PILOT\DATA\REPORT\(Reporting*.xml; session*.xml)        (rif. data)
+    PILOT\DATA\ROUTINE\((SERIALE MACCHINA)*.zip)            (tutti i
+                                                            file zip
+                                                            tranne
+                                                            quelli
+                                                            dell'ultima
+                                                            settimana)
+
+   (rif. data) = tutti i file piu' vecchi di 6 mesi.
+
+
+ Implementazione (mappata regola per regola):
+
+   R1  EventsManager\Data\PosteRestante*.xml                > 6 mesi
+   R2  EventsManager\Data\Events\*_NgcEventsData.xml + .bak > 6 mesi
+   R3  EventsManager\Data\MarkerStore\<host>\Reporting*.xml > 6 mesi
+       Differenze rispetto alla specifica testuale:
+        a) "nome host" = lo script itera TUTTE le sottocartelle host
+           presenti in MarkerStore, non solo quella matchata col
+           computer attuale. Motivo: lo stesso PC nel tempo puo' aver
+           avuto piu' hostname (cartelle multiple), e tutte vanno
+           pulite uniformemente.
+        b) Ricorsiva: la regola si applica anche alle sottocartelle
+           dentro ogni host (es. Photo\). Motivo: i file Reporting
+           possono stare in subdirectory profonde.
+   R4  EventsManager\Data\Transit\*                         sempre
+       Cancella sia file che sottocartelle. Non considera la data.
+   R5  Pilot\Data\LaPoste\PosteRestante_pilot*.xml          > 6 mesi
+   R6  Pilot\Data\Report\Reporting*.xml + session*.xml      > 6 mesi
+   R7  Pilot\Data\Routine\<seriale>*.zip                    > 7 giorni
+       Il seriale viene rilevato automaticamente leggendo il prefisso
+       (parte prima del primo "_") dei file zip in Routine. Se ce ne
+       sono di seriali diversi lo script si ferma con errore — possibile
+       data corruption da segnalare.
+
+   Note generali:
+   - "Piu' vecchi di X" = LastWriteTime anteriore al cutoff calcolato
+     da una data di riferimento (default: oggi).
+   - R7 ha cutoff 7 giorni, separato dai 6 mesi delle altre regole.
+   - R4 e R7 NON sono coinvolti dalla feature opzionale "range
+     retention" (-RetentionStart / -RetentionEnd): R4 cancella sempre,
+     R7 mantiene il proprio cutoff 7 giorni.
 
 
  BACKUP AUTOMATICO
