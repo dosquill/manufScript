@@ -431,9 +431,10 @@ $rulesPlan = @()
 $rulesPlan += [pscustomobject]@{ Id='R1'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA');         Patterns=@('PosteRestante*.xml');                       Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
 $rulesPlan += [pscustomobject]@{ Id='R2'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\EVENTS');  Patterns=@('*_NGCEVENTSDATA.xml','*_NGCEVENTSDATA.bak'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
 foreach ($h in $markerStoreHosts) {
-    # R3 e' ricorsivo: ogni cartella host puo' avere subdirectory (Photo, ecc.)
-    # che contengono altri Reporting*.xml. La regola si applica a tutto l'albero.
-    $rulesPlan += [pscustomobject]@{ Id='R3'; Dir=$h.FullName; Patterns=@('Reporting*.xml'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$true }
+    # R3: solo direct children dell'host, come da specifica letterale del documento
+    # cliente. Multi-host SI (itera ogni host folder), ma niente recursive in sub-dir
+    # (es. Photo\) — quelle restano intatte.
+    $rulesPlan += [pscustomobject]@{ Id='R3'; Dir=$h.FullName; Patterns=@('Reporting*.xml'); Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
 }
 $rulesPlan += [pscustomobject]@{ Id='R4'; Dir=(Join-Path $ManufRoot 'EVENTSMANAGER\DATA\TRANSIT'); Patterns=@();                                           Cutoff=$null;         KeepStart=$null;       KeepEnd=$null;     Mode='Transit'; Recurse=$false }
 $rulesPlan += [pscustomobject]@{ Id='R5'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\LAPOSTE');         Patterns=@('PosteRestante_pilot*.xml');                 Cutoff=$sixMonthsAgo; KeepStart=$rangeStart; KeepEnd=$rangeEnd; Mode='Pattern'; Recurse=$false }
@@ -502,7 +503,14 @@ $diffOk             = $true
 $reallyDeletedCount = 0
 $reallyAddedCount   = 0
 $reallyAddedSample  = ''
-$diffStatus         = 'N/A (no execute / no backup)'
+# Stato iniziale del diff. Sovrascritto sotto se il confronto e' davvero eseguito.
+$diffStatus = if (-not $Execute) {
+    'N/A (dry-run, niente da confrontare)'
+} elseif ($NoBackup) {
+    'N/A (-NoBackup: nessun backup di riferimento per il confronto)'
+} else {
+    'N/A (backup non riuscito)'
+}
 
 if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
     Write-Log -Rule '---' -Tag 'DIFF' -Message "Compare-Object backup vs Manuf pulita..."

@@ -6,8 +6,9 @@
 _cleanup-logs/
 *.log
 
-# Backup creati dallo script
+# Backup creati dallo script / dall'updater
 Manuf_backup_*/
+_pre-update-backup-*/
 *.bak
 
 # OS / editor
