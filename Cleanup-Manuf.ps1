@@ -70,8 +70,9 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
 $timestamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
-$summaryFile = Join-Path $LogDir "cleanup-$timestamp.summary.txt"
-$robocopyLog = Join-Path $LogDir "cleanup-$timestamp.robocopy.log"
+# Un solo file di log per run: contiene sia il log robocopy (durante backup)
+# sia il summary leggibile (appeso a fine esecuzione).
+$logFile = Join-Path $LogDir "cleanup-$timestamp.log"
 
 if (-not $BackupDir) {
     $BackupDir = "C:\ProgramData\Lectra\Manuf_backup_$timestamp"
@@ -404,14 +405,14 @@ $backupStatus   = 'N/A (dry-run)'
 if ($Execute -and -not $NoBackup) {
     Write-Log -Rule '---' -Tag 'BACKUP' -Message "Avvio robocopy: $ManufRoot -> $BackupDir"
     Write-Host "Backup in corso (robocopy /MT:16). Attendere..." -ForegroundColor Cyan
-    $backupExitCode = Backup-ManufRoot -Source $ManufRoot -Dest $BackupDir -LogFile $robocopyLog
+    $backupExitCode = Backup-ManufRoot -Source $ManufRoot -Dest $BackupDir -LogFile $logFile
     if ($backupExitCode -ge 8) {
-        throw "Backup fallito. Robocopy exit code = $backupExitCode. Log: $robocopyLog. Delete NON eseguito."
+        throw "Backup fallito. Robocopy exit code = $backupExitCode. Log: $logFile. Delete NON eseguito."
     }
     $backupSrcCount = @(Get-ChildItem -LiteralPath $ManufRoot -Recurse -File -Force -ErrorAction SilentlyContinue).Count
     $backupDstCount = @(Get-ChildItem -LiteralPath $BackupDir -Recurse -File -Force -ErrorAction SilentlyContinue).Count
     if ($backupSrcCount -ne $backupDstCount) {
-        throw "Backup file count mismatch: sorgente=$backupSrcCount destinazione=$backupDstCount. Delete NON eseguito. Log: $robocopyLog"
+        throw "Backup file count mismatch: sorgente=$backupSrcCount destinazione=$backupDstCount. Delete NON eseguito. Log: $logFile"
     }
     $backupStatus = "OK (robocopy exit=$backupExitCode, file=$backupDstCount)"
     Write-Log -Rule '---' -Tag 'BACKUP' -Message "OK exit=$backupExitCode src=$backupSrcCount dst=$backupDstCount"
@@ -533,7 +534,7 @@ if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
 
 Write-Log -Rule '---' -Tag 'SUMMARY' -Message ("Matched={0} Deleted={1} DryRun={2} Skipped={3} Errors={4}" -f `
     $script:stats.Matched, $script:stats.Deleted, $script:stats.DryRun, $script:stats.Skipped, $script:stats.Errors)
-Write-Log -Rule '---' -Tag 'END'     -Message "Summary: $summaryFile"
+Write-Log -Rule '---' -Tag 'END'     -Message "Summary: $logFile"
 
 # Generazione summary leggibile su file
 $r3HostList = if ($markerStoreHostNames.Count -gt 0) { $markerStoreHostNames -join ', ' } else { '(none)' }
@@ -569,7 +570,6 @@ if ($resolvedSerial) {
 [void]$sb.AppendLine(" Backup     : $backupStatus")
 if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
     [void]$sb.AppendLine(" Backup path: $BackupDir")
-    [void]$sb.AppendLine(" Backup log : $robocopyLog")
 }
 [void]$sb.AppendLine(" Diff       : $diffStatus")
 if (-not $diffOk -and $reallyAddedSample) {
@@ -612,11 +612,14 @@ if ($Execute) {
 }
 [void]$sb.AppendLine((" Saltati : {0} cartelle/pattern" -f $script:stats.Skipped))
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine(" Summary: $summaryFile")
+[void]$sb.AppendLine(" Log: $logFile")
 [void]$sb.AppendLine("===================================================================")
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($summaryFile, $sb.ToString(), $utf8NoBom)
+# Se il file ha gia' contenuto (log robocopy del backup), il summary va appeso
+# preceduto da un separatore visivo. Se il file non esiste, AppendAllText lo crea.
+$summarySection = "`r`n" + ('=' * 67) + "`r`n SUMMARY ESECUZIONE`r`n" + ('=' * 67) + "`r`n" + $sb.ToString()
+[System.IO.File]::AppendAllText($logFile, $summarySection, $utf8NoBom)
 
 Write-Host ""
 Write-Host ($sb.ToString())
@@ -645,12 +648,12 @@ if ($Execute) {
         Write-Host " Backup : disabilitato (-NoBackup)" -ForegroundColor $bColor
     }
     Write-Host (" Diff   : {0}" -f $diffStatus) -ForegroundColor $bColor
-    Write-Host " Summary: $summaryFile" -ForegroundColor $bColor
+    Write-Host " Summary: $logFile" -ForegroundColor $bColor
     Write-Host "==============================================================" -ForegroundColor $bColor
 } else {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host (" DRY-RUN: {0} file candidati alla cancellazione. NESSUNA cancellazione eseguita." -f $bAtteso) -ForegroundColor Cyan
-    Write-Host " Summary: $summaryFile" -ForegroundColor Cyan
+    Write-Host " Summary: $logFile" -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
 
     # Prompt post-dry-run: chiedi se procedere con la cancellazione reale.
