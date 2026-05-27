@@ -252,7 +252,7 @@ diff KO). Aprire il file di log per i dettagli.
 
 ## Autore
 
-**Domenico Di Squillante** — [github.com/dosquill](https://github.com/dosquill)
+**Domenico Squillante** — [github.com/dosquill](https://github.com/dosquill)
 
 Per segnalazioni di bug, suggerimenti o richieste di funzionalità, aprire
 una *issue* sul repo: <https://github.com/dosquill/manufScript/issues>
