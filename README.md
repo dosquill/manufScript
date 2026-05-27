@@ -21,15 +21,15 @@ Operazione una tantum, alla prima installazione su una macchina nuova.
    tipo `Cleanup-Manuf`, e spostarla dove serve (es. Desktop o `C:\Tools\`).
 7. Aprire la cartella estratta. Dentro ci sono:
    - `Cleanup-Manuf.ps1` — lo script vero e proprio
-   - `start.bat` — lanciatore per il cliente (produzione)
-   - `update.bat` — aggiornatore (scarica versione nuova da GitHub)
-   - `README.md` — questo documento
+   - `start.bat` — lanciatore dello script (bypassa logiche di sicurezza Windows)
+   - `update.bat` — aggiornamento dello script (scarica versione nuova da GitHub senza avere l'account Github)
+   - `README.md` — documentazione
 8. Doppio-click su `start.bat` per il primo lancio. Se Windows mostra un avviso
    tipo *"Windows ha protetto il PC"*, cliccare **`Ulteriori informazioni`** →
    **`Esegui comunque`**. È un comportamento normale per script scaricati
    dal web (Mark-of-the-Web).
 
-Da quel momento in poi, basta sempre `start.bat` per le pulizie e `update.bat`
+Da quel momento in poi, basta sempre `start.bat` per lo script e `update.bat`
 quando si vuole aggiornare alla versione più recente.
 
 **Requisiti macchina**: Windows 10/11 con PowerShell 5.1+ (incluso di default)
