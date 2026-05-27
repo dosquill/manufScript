@@ -77,7 +77,8 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
 $timestamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
 # Un solo file di log per run: contiene sia il log robocopy (durante backup)
 # sia il summary leggibile (appeso a fine esecuzione).
-$logFile = Join-Path $LogDir "cleanup-$timestamp.log"
+$script:logFile = Join-Path $LogDir "cleanup-$timestamp.log"
+$logFile = $script:logFile
 
 if (-not $BackupDir) {
     $BackupDir = "C:\ProgramData\Lectra\Manuf_backup_$timestamp"
@@ -93,9 +94,13 @@ $script:totalExpected = 0
 $script:totalResidue  = 0
 
 function Write-Log {
+    # Scrive solo su file (script:logFile). Niente output a console: le poche righe
+    # davvero utili a video sono stampate esplicitamente con Write-Host nei punti chiave.
     param([string]$Rule, [string]$Tag, [string]$Message)
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] [{2}] {3}" -f (Get-Date), $Rule, $Tag, $Message
-    Write-Host $line
+    if ($script:logFile) {
+        try { Add-Content -LiteralPath $script:logFile -Value $line -Encoding UTF8 } catch {}
+    }
 }
 
 # Test centralizzato: il file va cancellato secondo cutoff classico O range retention.
@@ -266,8 +271,9 @@ function Backup-ManufRoot {
         '/NFL', '/NDL', '/NJH', '/NP',
         "/LOG+:$LogFile"
     )
-    # Out-Host: stampa output robocopy a console senza inquinare la pipeline di ritorno.
-    & robocopy @rcArgs | Out-Host
+    # Out-Null: silenzia output robocopy sulla console (il dettaglio va comunque
+    # nel log via /LOG+:$LogFile). Pipeline di ritorno rimane pulita per $LASTEXITCODE.
+    & robocopy @rcArgs | Out-Null
     return $LASTEXITCODE
 }
 
@@ -465,6 +471,7 @@ foreach ($rule in $rulesPlan) {
 }
 $script:totalExpected = ($script:perRuleExpected.Values | Measure-Object -Sum).Sum
 Write-Log -Rule '---' -Tag 'PRESCAN' -Message ("Atteso totale: {0} file" -f $script:totalExpected)
+Write-Host (" Pre-scan: {0} file candidati" -f $script:totalExpected) -ForegroundColor Cyan
 
 # APPLY
 foreach ($rule in $rulesPlan) {
@@ -500,6 +507,8 @@ if ($Execute) {
     }
     $script:totalResidue = ($script:perRuleResidue.Values | Measure-Object -Sum).Sum
     Write-Log -Rule '---' -Tag 'POSTSCAN' -Message ("Residuo totale: {0} file" -f $script:totalResidue)
+    $rcCol = if ($script:totalResidue -eq 0) { 'Green' } else { 'Red' }
+    Write-Host (" Post-scan: residuo {0} file" -f $script:totalResidue) -ForegroundColor $rcCol
 }
 
 # DIFF post-cleanup: confronta backup vs Manuf pulita con Compare-Object.
@@ -543,6 +552,8 @@ if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
         }
     }
     Write-Log -Rule '---' -Tag 'DIFF' -Message $diffStatus
+    $diffCol = if ($diffOk) { 'Green' } else { 'Red' }
+    Write-Host (" Diff: {0}" -f $diffStatus) -ForegroundColor $diffCol
 }
 
 # Copia POST-cleanup della Manuf ripulita in path utente (Desktop default).
@@ -692,9 +703,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $summarySection = "`r`n" + ('=' * 67) + "`r`n SUMMARY ESECUZIONE`r`n" + ('=' * 67) + "`r`n" + $sb.ToString()
 [System.IO.File]::AppendAllText($logFile, $summarySection, $utf8NoBom)
 
-Write-Host ""
-Write-Host ($sb.ToString())
-Write-Host ""
+# La tabella completa per-regola e' nel summary file. A console solo il banner
+# finale sintetico (sotto), per non sommergere l'utente di dettagli.
 
 # Banner finale
 $bAtteso = [int]$script:totalExpected
