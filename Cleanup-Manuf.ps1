@@ -292,6 +292,23 @@ function Backup-ManufRoot {
     return $LASTEXITCODE
 }
 
+# Reset dei contatori di stato della pipeline. Necessario per single-process refactor
+# quando lo stesso processo esegue prima un dry-run e poi una execute (sostituisce
+# lo spawn del child PowerShell). Su questo branch (refactor/single-process) servira'
+# tra dry-run e execute; sul main branch la funzione e' definita ma non chiamata.
+function Reset-PipelineState {
+    foreach ($k in @($script:stats.Keys)) { $script:stats[$k] = 0 }
+    foreach ($k in @($script:perRuleExpected.Keys)) {
+        $script:perRuleExpected[$k] = 0
+        $script:perRuleDeleted[$k]  = 0
+        $script:perRuleErrors[$k]   = 0
+        $script:perRuleResidue[$k]  = 0
+        $script:perRuleExecuted[$k] = $true
+    }
+    $script:totalExpected = 0
+    $script:totalResidue  = 0
+}
+
 # Parsing reference date / range retention. Solo formato yyyy-MM-dd (ora 00:00:00).
 $allowedDateFormat = 'yyyy-MM-dd'
 if ($ReferenceDate) {
