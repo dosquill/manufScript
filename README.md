@@ -181,9 +181,13 @@ R7 (ZIP Routine, 7 giorni) e R4 (Transit, sempre) non sono coinvolti.
 
 ## Aggiornamento dello script
 
-Doppio-click su **`update.bat`**. Scarica lo zip dell'ultima versione del repo
-da GitHub (branch `main`) e sostituisce **tutti** i file locali. Funziona come
-un "git pull" semplificato.
+Doppio-click su **`update.bat`**.
+
+1. Chiede a GitHub via API qual è il SHA del commit corrente di `main`.
+2. Lo confronta con il SHA salvato in `.last-update-sha` (file locale).
+   - **Match** → "Sei già all'ultima versione", niente download, exit.
+   - **Diverso** → scarica lo zip del repo, estrae e sostituisce **tutti** i
+     file locali. Funziona come un "git pull" semplificato.
 
 Una copia di tutti i file pre-aggiornamento viene salvata in:
 ```
@@ -191,8 +195,9 @@ _pre-update-backup-<data-ora>\
 ```
 utile per rollback se qualcosa va storto.
 
-Serve una connessione internet attiva. Se il download fallisce, i file locali
-**non** vengono modificati.
+Serve una connessione internet attiva. Se l'API o il download falliscono, i
+file locali **non** vengono modificati (l'API rate-limit non blocca: in caso
+di errore l'update procede comunque col download forzato).
 
 ### Note tecniche
 
@@ -201,6 +206,9 @@ Serve una connessione internet attiva. Se il download fallisce, i file locali
   script può sovrascrivere anche `update.bat` stesso (un `.bat` in esecuzione
   non può modificare sé stesso).
 - Lo zip viene scaricato in `%TEMP%` e cancellato a fine update.
+- Il file `.last-update-sha` (40 caratteri esadecimali, il SHA del commit
+  applicato) resta locale alla macchina — non è committato nel repo, ogni
+  installazione ha il proprio.
 
 ---
 

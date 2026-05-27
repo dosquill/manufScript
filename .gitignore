@@ -11,6 +11,9 @@ Manuf_backup_*/
 _pre-update-backup-*/
 *.bak
 
+# Stato updater (SHA commit ultimo applicato, locale per ogni macchina)
+.last-update-sha
+
 # OS / editor
 Thumbs.db
 .DS_Store
