@@ -47,6 +47,10 @@ if (-not $PSBoundParameters.ContainsKey('Execute')) {
 
 $ErrorActionPreference = 'Stop'
 $exitCode = 0
+# Settato a $true quando il parent fa self-respawn di un child execute: in quel
+# caso il child ha gia' fatto Read-Host finale e il parent NON deve farne un secondo
+# (altrimenti l'utente deve premere INVIO due volte alla chiusura).
+$skipFinalRead = $false
 
 try {
 
@@ -92,16 +96,21 @@ $script:perRuleExpected = [ordered]@{ 'R1'=0; 'R2'=0; 'R3'=0; 'R4'=0; 'R5'=0; 'R
 $script:perRuleDeleted  = [ordered]@{ 'R1'=0; 'R2'=0; 'R3'=0; 'R4'=0; 'R5'=0; 'R6'=0; 'R7'=0 }
 $script:perRuleErrors   = [ordered]@{ 'R1'=0; 'R2'=0; 'R3'=0; 'R4'=0; 'R5'=0; 'R6'=0; 'R7'=0 }
 $script:perRuleResidue  = [ordered]@{ 'R1'=0; 'R2'=0; 'R3'=0; 'R4'=0; 'R5'=0; 'R6'=0; 'R7'=0 }
+# Traccia se ogni regola e' stata effettivamente eseguita (true) o saltata
+# perche' il path/host di riferimento non esiste (false). Serve per non far
+# apparire [OK] nel summary quando la regola non e' partita per nulla.
+$script:perRuleExecuted = [ordered]@{ 'R1'=$true; 'R2'=$true; 'R3'=$true; 'R4'=$true; 'R5'=$true; 'R6'=$true; 'R7'=$true }
 $script:totalExpected = 0
 $script:totalResidue  = 0
 
 function Write-Log {
-    # Scrive solo su file (script:logFile). Niente output a console: le poche righe
-    # davvero utili a video sono stampate esplicitamente con Write-Host nei punti chiave.
+    # Scrive solo su file (script:logFile) in UTF-16 LE (Unicode) per evitare
+    # encoding misto con robocopy /UNICODE e con AppendAllText del summary.
+    # Niente output a console: le poche righe utili a video sono stampate con Write-Host.
     param([string]$Rule, [string]$Tag, [string]$Message)
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] [{2}] {3}" -f (Get-Date), $Rule, $Tag, $Message
     if ($script:logFile) {
-        try { Add-Content -LiteralPath $script:logFile -Value $line -Encoding UTF8 } catch {}
+        try { Add-Content -LiteralPath $script:logFile -Value $line -Encoding Unicode } catch {}
     }
 }
 
@@ -113,10 +122,13 @@ function Test-ShouldDelete {
         [Nullable[datetime]]$KeepEnd,
         [Nullable[datetime]]$Cutoff
     )
-    if ($KeepStart -and $KeepEnd) {
+    # Confronti espliciti con $null invece di affidarsi alla truthiness di
+    # [Nullable[datetime]] (che in PS 5.1 si comporta in modo ambiguo per
+    # DateTime.MinValue se qualcuno lo passa esplicitamente).
+    if ($null -ne $KeepStart -and $null -ne $KeepEnd) {
         return ($When -lt $KeepStart -or $When -gt $KeepEnd)
     }
-    if ($Cutoff) {
+    if ($null -ne $Cutoff) {
         return ($When -lt $Cutoff)
     }
     return $true
@@ -271,6 +283,7 @@ function Backup-ManufRoot {
         $Source, $Dest,
         '/E', '/COPY:DAT', '/R:2', '/W:5', '/MT:16',
         '/NFL', '/NDL', '/NJH', '/NP',
+        '/UNICODE',
         "/LOG+:$LogFile"
     )
     # Out-Null: silenzia output robocopy sulla console (il dettaglio va comunque
@@ -319,6 +332,10 @@ if ($RetentionStart -and $RetentionEnd) {
     if ($keepStartDate -gt $keepEndDate) {
         throw "RetentionStart ($RetentionStart) non puo' essere posteriore a RetentionEnd ($RetentionEnd)."
     }
+    # Range INCLUSIVO sul giorno End: RetentionEnd '2019-01-01' significa 'tieni fino
+    # alla fine del 2019-01-01' (23:59:59.9999999). Senza questa correzione un file
+    # con LastWriteTime '2019-01-01 14:30:00' sarebbe scartato (> KeepEnd a mezzanotte).
+    $keepEndDate = $keepEndDate.AddDays(1).AddTicks(-1)
     $retentionMode = 'range'
 }
 
@@ -368,7 +385,7 @@ $serialLabel = if ($resolvedSerial) { $resolvedSerial } else { '(non risolto - R
 Write-Host ""
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host " CLEANUP-MANUF" -ForegroundColor Cyan
-Write-Host " Autore: Domenico Squillante (github.com/dosquill)" -ForegroundColor DarkGray
+Write-Host " Autore: Domenico Di Squillante (github.com/dosquill)" -ForegroundColor DarkGray
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host (" Modalita'      : {0}" -f $modeLabel)
 Write-Host (" Cartella Manuf : {0}" -f $ManufRoot)
@@ -459,6 +476,17 @@ $rulesPlan += [pscustomobject]@{ Id='R7'; Dir=(Join-Path $ManufRoot 'PILOT\DATA\
 if ($markerStoreHosts.Count -eq 0) {
     Write-Log -Rule 'R3' -Tag 'SKIP' -Message "MarkerStore vuota o non trovata: $markerStoreRoot"
     $script:stats.Skipped++
+    $script:perRuleExecuted['R3'] = $false
+}
+
+# Marca le altre regole come non-eseguite se il path non esiste a priori.
+# (R3 e' gia' gestita sopra via markerStoreHosts; le altre ricavano il loro Dir
+# dal rulesPlan, lo check del path avviene dentro Remove-ByPattern/Clear-TransitFolder
+# ma per il verdict summary serve un flag esplicito anche qui.)
+foreach ($rule in $rulesPlan) {
+    if (-not $rule.Dir -or -not (Test-Path -LiteralPath $rule.Dir -PathType Container)) {
+        $script:perRuleExecuted[$rule.Id] = $false
+    }
 }
 
 # PRE-SCAN: conteggio atteso per ogni regola (R3 aggrega su tutti gli host con +=)
@@ -599,10 +627,19 @@ if ($Execute -and $diffOk -and -not $NoPostBackup) {
                     Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "FAIL exit=$pcCode"
                     Write-Host (" Copia FALLITA (robocopy exit={0})" -f $pcCode) -ForegroundColor Red
                 } else {
-                    $pcCount = @(Get-ChildItem -LiteralPath $PostBackupDir -Recurse -File -Force -ErrorAction SilentlyContinue).Count
-                    $postBackupStatus = "OK (file=$pcCount, robocopy exit=$pcCode) -> $PostBackupDir"
-                    Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "OK exit=$pcCode file=$pcCount"
-                    Write-Host (" Copia OK: {0} ({1} file)" -f $PostBackupDir, $pcCount) -ForegroundColor Green
+                    # Verifica src/dst file count (stessa logica del PRE-backup): se robocopy
+                    # ha skippato silenziosamente dei file (lock, ACL) il mismatch lo rivela.
+                    $pcSrcCount = @(Get-ChildItem -LiteralPath $ManufRoot     -Recurse -File -Force -ErrorAction SilentlyContinue).Count
+                    $pcDstCount = @(Get-ChildItem -LiteralPath $PostBackupDir -Recurse -File -Force -ErrorAction SilentlyContinue).Count
+                    if ($pcSrcCount -ne $pcDstCount) {
+                        $postBackupStatus = "KO (file count mismatch: src=$pcSrcCount dst=$pcDstCount)"
+                        Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "MISMATCH src=$pcSrcCount dst=$pcDstCount exit=$pcCode"
+                        Write-Host (" Copia KO: count mismatch src={0} dst={1}" -f $pcSrcCount, $pcDstCount) -ForegroundColor Red
+                    } else {
+                        $postBackupStatus = "OK (file=$pcDstCount, robocopy exit=$pcCode) -> $PostBackupDir"
+                        Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "OK exit=$pcCode file=$pcDstCount"
+                        Write-Host (" Copia OK: {0} ({1} file)" -f $PostBackupDir, $pcDstCount) -ForegroundColor Green
+                    }
                 }
             } catch {
                 $postBackupStatus = "KO ($($_.Exception.Message))"
@@ -669,7 +706,13 @@ if ($Execute) {
         $cancellati = [int]$script:perRuleDeleted[$r]
         $residuo    = [int]$script:perRuleResidue[$r]
         $errori     = [int]$script:perRuleErrors[$r]
-        $verdict = if ($cancellati -eq $atteso -and $residuo -eq 0 -and $errori -eq 0) { '[OK]' } else { '[KO]' }
+        $verdict = if (-not $script:perRuleExecuted[$r]) {
+            '[N/A]'
+        } elseif ($cancellati -eq $atteso -and $residuo -eq 0 -and $errori -eq 0) {
+            '[OK]'
+        } else {
+            '[KO]'
+        }
         [void]$sb.AppendLine(("   {0}  {1}  atteso {2,6}  cancellati {3,6}  residuo {4,4}  errori {5,3}  {6}" -f `
             $r, $ruleDescriptions[$r].PadRight(70), $atteso, $cancellati, $residuo, $errori, $verdict))
     }
@@ -700,11 +743,12 @@ if ($Execute) {
 [void]$sb.AppendLine(" Log: $logFile")
 [void]$sb.AppendLine("===================================================================")
 
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-# Se il file ha gia' contenuto (log robocopy del backup), il summary va appeso
-# preceduto da un separatore visivo. Se il file non esiste, AppendAllText lo crea.
+# Tutto il log file e' UTF-16 LE (coerente con Write-Log -Encoding Unicode e
+# robocopy /UNICODE). Append senza BOM perche' il BOM eventuale e' stato gia'
+# scritto dal primo writer.
+$utf16NoBom = New-Object System.Text.UnicodeEncoding($false, $false)
 $summarySection = "`r`n" + ('=' * 67) + "`r`n SUMMARY ESECUZIONE`r`n" + ('=' * 67) + "`r`n" + $sb.ToString()
-[System.IO.File]::AppendAllText($logFile, $summarySection, $utf8NoBom)
+[System.IO.File]::AppendAllText($logFile, $summarySection, $utf16NoBom)
 
 # La tabella completa per-regola e' nel summary file. A console solo il banner
 # finale sintetico (sotto), per non sommergere l'utente di dettagli.
@@ -776,6 +820,8 @@ if ($Execute) {
 
         & powershell.exe @childArgs
         $exitCode = $LASTEXITCODE
+        # Il child ha gia' fatto Read-Host finale. Skip del parent per non chiedere INVIO due volte.
+        $skipFinalRead = $true
     } else {
         Write-Log -Rule '---' -Tag 'END' -Message "Utente non ha proseguito con execute dopo dry-run."
         Write-Host "Nessuna cancellazione effettuata. Uscita." -ForegroundColor Cyan
@@ -790,7 +836,9 @@ if ($Execute) {
     Write-Host "==============================================================" -ForegroundColor Red
     $exitCode = 1
 } finally {
-    Write-Host ""
-    Read-Host "Premi INVIO per uscire"
+    if (-not $skipFinalRead) {
+        Write-Host ""
+        Read-Host "Premi INVIO per uscire"
+    }
 }
 exit $exitCode
