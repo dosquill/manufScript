@@ -10,6 +10,11 @@ param(
     [string]$BackupDir,
     [switch]$NoBackup,
     [string]$LogDir,
+    # Path destinazione della copia POST-cleanup (Manuf ripulita).
+    # Se non passato e in modalita' interattiva, viene chiesta a video con
+    # fallback Desktop\Manuf_<timestamp>. Per disabilitare passare -NoPostBackup.
+    [string]$PostBackupDir,
+    [switch]$NoPostBackup,
     # Flag interno: settato quando lo script si rilancia da solo dopo un dry-run
     # confermato dall'utente, per saltare la conferma 'SI' duplicata.
     [switch]$PostDryRun
@@ -540,6 +545,63 @@ if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
     Write-Log -Rule '---' -Tag 'DIFF' -Message $diffStatus
 }
 
+# Copia POST-cleanup della Manuf ripulita in path utente (Desktop default).
+# Scopo: snapshot della Manuf pulita per archivio/backup ufficiale del cliente,
+# senza i file vecchi che rallentavano la copia manuale via Explorer.
+# Backup PRE in ProgramData resta come safety net.
+$postBackupStatus = 'N/A (no execute / diff KO)'
+if ($Execute -and $diffOk -and -not $NoPostBackup) {
+    if (-not $PostBackupDir) {
+        $defaultDest = Join-Path ([Environment]::GetFolderPath('Desktop')) "Manuf_$timestamp"
+        Write-Host ""
+        Write-Host "==============================================================" -ForegroundColor Cyan
+        Write-Host " Copia POST-cleanup della Manuf pulita" -ForegroundColor Cyan
+        Write-Host "==============================================================" -ForegroundColor Cyan
+        Write-Host (" Default (INVIO per accettare): {0}" -f $defaultDest)
+        $userPath = Read-Host "Path destinazione (INVIO = default, q = salta)"
+        if ($userPath -eq 'q' -or $userPath -eq 'Q') {
+            $PostBackupDir = $null
+            $postBackupStatus = 'saltata da utente'
+            Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "Saltata da utente (q)"
+        } elseif ([string]::IsNullOrWhiteSpace($userPath)) {
+            $PostBackupDir = $defaultDest
+        } else {
+            $PostBackupDir = $userPath.Trim('"').Trim("'")
+        }
+    }
+
+    if ($PostBackupDir) {
+        if (Test-Path -LiteralPath $PostBackupDir) {
+            Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "Destinazione gia' esistente, skip: $PostBackupDir"
+            $postBackupStatus = "KO (destinazione gia' esistente: $PostBackupDir)"
+            Write-Host (" ATTENZIONE: {0} gia' esiste, copia saltata." -f $PostBackupDir) -ForegroundColor Yellow
+        } else {
+            Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "Copia: $ManufRoot -> $PostBackupDir"
+            Write-Host (" Copia in corso (robocopy /MT:16) -> {0}" -f $PostBackupDir) -ForegroundColor Cyan
+            try {
+                $pcCode = Backup-ManufRoot -Source $ManufRoot -Dest $PostBackupDir -LogFile $logFile
+                if ($pcCode -ge 8) {
+                    $postBackupStatus = "KO (robocopy exit=$pcCode)"
+                    Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "FAIL exit=$pcCode"
+                    Write-Host (" Copia FALLITA (robocopy exit={0})" -f $pcCode) -ForegroundColor Red
+                } else {
+                    $pcCount = @(Get-ChildItem -LiteralPath $PostBackupDir -Recurse -File -Force -ErrorAction SilentlyContinue).Count
+                    $postBackupStatus = "OK (file=$pcCount, robocopy exit=$pcCode) -> $PostBackupDir"
+                    Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "OK exit=$pcCode file=$pcCount"
+                    Write-Host (" Copia OK: {0} ({1} file)" -f $PostBackupDir, $pcCount) -ForegroundColor Green
+                }
+            } catch {
+                $postBackupStatus = "KO ($($_.Exception.Message))"
+                Write-Log -Rule '---' -Tag 'POSTCOPY' -Message "EXCEPTION: $($_.Exception.Message)"
+            }
+        }
+    }
+} elseif ($Execute -and $NoPostBackup) {
+    $postBackupStatus = 'disabilitato (-NoPostBackup)'
+} elseif ($Execute -and -not $diffOk) {
+    $postBackupStatus = 'N/A (diff KO, copia non eseguita)'
+}
+
 Write-Log -Rule '---' -Tag 'SUMMARY' -Message ("Matched={0} Deleted={1} DryRun={2} Skipped={3} Errors={4}" -f `
     $script:stats.Matched, $script:stats.Deleted, $script:stats.DryRun, $script:stats.Skipped, $script:stats.Errors)
 Write-Log -Rule '---' -Tag 'END'     -Message "Summary: $logFile"
@@ -583,6 +645,7 @@ if ($Execute -and -not $NoBackup -and $null -ne $backupExitCode) {
 if (-not $diffOk -and $reallyAddedSample) {
     [void]$sb.AppendLine("              file inattesi (primi 5): $reallyAddedSample")
 }
+[void]$sb.AppendLine(" Post-copy  : $postBackupStatus")
 [void]$sb.AppendLine("")
 
 if ($Execute) {
@@ -656,6 +719,7 @@ if ($Execute) {
         Write-Host " Backup : disabilitato (-NoBackup)" -ForegroundColor $bColor
     }
     Write-Host (" Diff   : {0}" -f $diffStatus) -ForegroundColor $bColor
+    Write-Host (" Copia  : {0}" -f $postBackupStatus) -ForegroundColor $bColor
     Write-Host " Summary: $logFile" -ForegroundColor $bColor
     Write-Host "==============================================================" -ForegroundColor $bColor
 } else {

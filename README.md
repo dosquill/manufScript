@@ -7,6 +7,36 @@ e verifica empiricamente l'esito.
 
 ---
 
+## Installazione (first-use)
+
+Operazione una tantum, alla prima installazione su una macchina nuova.
+
+1. Aprire nel browser: <https://github.com/dosquill/manufScript>
+2. Cliccare sul pulsante verde **`<> Code`** in alto a destra.
+3. Nel menù che si apre, cliccare **`Download ZIP`**.
+4. Il file `manufScript-main.zip` viene scaricato nella cartella `Download`.
+5. Tasto destro sullo ZIP → **`Estrai tutto…`** → confermare. Si crea la cartella
+   `manufScript-main`.
+6. (Opzionale ma consigliato) Rinominare la cartella in qualcosa di chiaro,
+   tipo `Cleanup-Manuf`, e spostarla dove serve (es. Desktop o `C:\Tools\`).
+7. Aprire la cartella estratta. Dentro ci sono:
+   - `Cleanup-Manuf.ps1` — lo script vero e proprio
+   - `start.bat` — lanciatore per il cliente (produzione)
+   - `update.bat` — aggiornatore (scarica versione nuova da GitHub)
+   - `README.md` — questo documento
+8. Doppio-click su `start.bat` per il primo lancio. Se Windows mostra un avviso
+   tipo *"Windows ha protetto il PC"*, cliccare **`Ulteriori informazioni`** →
+   **`Esegui comunque`**. È un comportamento normale per script scaricati
+   dal web (Mark-of-the-Web).
+
+Da quel momento in poi, basta sempre `start.bat` per le pulizie e `update.bat`
+quando si vuole aggiornare alla versione più recente.
+
+**Requisiti macchina**: Windows 10/11 con PowerShell 5.1+ (incluso di default)
+e `curl.exe` (presente di default da Windows 10 1803+).
+
+---
+
 ## Come si lancia
 
 Doppio-click su **`start.bat`**. Si apre un menu:
@@ -109,6 +139,29 @@ appena pulita tramite `Compare-Object`:
 
 Verdetto OK se `spariti == stats.Deleted` **e** `aggiunti == 0`. Se anche un
 solo controllo fallisce, l'esito finale è KO.
+
+---
+
+## Copia post-cleanup (snapshot della Manuf pulita)
+
+Dopo che la cancellazione + diff sono OK, lo script chiede una **destinazione**
+in cui salvare una copia integrale della cartella `Manuf` **già ripulita**.
+Scopo: avere il backup "ufficiale" che il cliente conserva, senza più i file
+vecchi che rallentavano la copia manuale via Explorer.
+
+- Default (basta premere INVIO): `<Desktop>\Manuf_<data-ora>`
+- Inserire un path personalizzato per copiare altrove (NAS, unità esterna,
+  un'altra cartella del disco).
+- Scrivere `q` per saltare la copia.
+
+Metodo: `robocopy /MT:16` (multi-thread). Su strutture con migliaia di file
+piccoli (XML, log) è 5–10x più veloce di una copia con Esplora Risorse perché
+parallelizza l'I/O su 16 thread.
+
+Il backup PRE-cancellazione in `C:\ProgramData\Lectra\Manuf_backup_<ts>`
+resta comunque come safety net.
+
+Per disabilitare la copia post-cleanup da CLI: `-NoPostBackup`.
 
 ---
 
