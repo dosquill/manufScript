@@ -243,3 +243,17 @@ spazio disco.
 **`ESITO: KO -- vedere summary`**
 Almeno una verifica è fallita (cancellazione incompleta, residuo, errori, o
 diff KO). Aprire il file di log per i dettagli.
+
+---
+
+## Autore
+
+**Domenico Di Squillante** — [github.com/dosquill](https://github.com/dosquill)
+
+Per segnalazioni di bug, suggerimenti o richieste di funzionalità, aprire
+una *issue* sul repo: <https://github.com/dosquill/manufScript/issues>
+
+## Licenza
+
+Distribuito sotto licenza **MIT**. Vedi il file [`LICENSE`](LICENSE) per
+i dettagli completi.

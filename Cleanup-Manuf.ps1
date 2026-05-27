@@ -366,6 +366,7 @@ $serialLabel = if ($resolvedSerial) { $resolvedSerial } else { '(non risolto - R
 Write-Host ""
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host " CLEANUP-MANUF" -ForegroundColor Cyan
+Write-Host " Autore: Domenico Di Squillante (github.com/dosquill)" -ForegroundColor DarkGray
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host (" Modalita'      : {0}" -f $modeLabel)
 Write-Host (" Cartella Manuf : {0}" -f $ManufRoot)
