@@ -16,10 +16,7 @@ param(
     # Se non passato e in modalita' interattiva, viene chiesta a video con
     # fallback Desktop\Manuf_<timestamp>. Per disabilitare passare -NoPostBackup.
     [string]$PostBackupDir,
-    [switch]$NoPostBackup,
-    # Flag interno: settato quando lo script si rilancia da solo dopo un dry-run
-    # confermato dall'utente, per saltare la conferma 'SI' duplicata.
-    [switch]$PostDryRun
+    [switch]$NoPostBackup
 )
 
 # Menu interattivo se -Execute NON e' stato passato esplicitamente.
@@ -47,10 +44,6 @@ if (-not $PSBoundParameters.ContainsKey('Execute')) {
 
 $ErrorActionPreference = 'Stop'
 $exitCode = 0
-# Settato a $true quando il parent fa self-respawn di un child execute: in quel
-# caso il child ha gia' fatto Read-Host finale e il parent NON deve farne un secondo
-# (altrimenti l'utente deve premere INVIO due volte alla chiusura).
-$skipFinalRead = $false
 
 try {
 
@@ -423,26 +416,21 @@ Write-Log -Rule '---' -Tag 'MARKER'    -Message ("MarkerStore hosts: {0}" -f $ma
 
 # Conferma -Execute
 if ($Execute) {
-    if ($PostDryRun) {
-        # L'utente ha gia' confermato dopo il dry-run nello stesso flusso, salta la doppia conferma.
-        Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Esecuzione confermata via dry-run preview (PostDryRun)"
+    Write-Host "==============================================================" -ForegroundColor Yellow
+    Write-Host " MODALITA' -EXECUTE: cancellazione PERMANENTE (no Cestino)" -ForegroundColor Yellow
+    if (-not $NoBackup) {
+        Write-Host (" Backup automatico in: {0}" -f $BackupDir) -ForegroundColor Yellow
     } else {
-        Write-Host "==============================================================" -ForegroundColor Yellow
-        Write-Host " MODALITA' -EXECUTE: cancellazione PERMANENTE (no Cestino)" -ForegroundColor Yellow
-        if (-not $NoBackup) {
-            Write-Host (" Backup automatico in: {0}" -f $BackupDir) -ForegroundColor Yellow
-        } else {
-            Write-Host " ATTENZIONE: backup DISABILITATO (-NoBackup)" -ForegroundColor Red
-        }
-        Write-Host "==============================================================" -ForegroundColor Yellow
-        $confirm = Read-Host "Confermare la cancellazione? Scrivere 'SI' (qualsiasi altra risposta annulla)"
-        if ($confirm -cne 'SI') {
-            Write-Log -Rule '---' -Tag 'ABORT' -Message "Esecuzione annullata dall'utente (risposta: '$confirm')"
-            Write-Host "Esecuzione annullata." -ForegroundColor Cyan
-            return
-        }
-        Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Utente ha confermato -Execute"
+        Write-Host " ATTENZIONE: backup DISABILITATO (-NoBackup)" -ForegroundColor Red
     }
+    Write-Host "==============================================================" -ForegroundColor Yellow
+    $confirm = Read-Host "Confermare la cancellazione? Scrivere 'SI' (qualsiasi altra risposta annulla)"
+    if ($confirm -cne 'SI') {
+        Write-Log -Rule '---' -Tag 'ABORT' -Message "Esecuzione annullata dall'utente (risposta: '$confirm')"
+        Write-Host "Esecuzione annullata." -ForegroundColor Cyan
+        return
+    }
+    Write-Log -Rule '---' -Tag 'CONFIRM' -Message "Utente ha confermato -Execute"
 }
 
 # Backup pre-esecuzione (solo -Execute, opt-out con -NoBackup)
@@ -802,47 +790,23 @@ if ($Execute) {
     Write-Host " Summary: $logFile" -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
 
-    # Prompt post-dry-run: chiedi se procedere con la cancellazione reale.
-    # Se l'utente conferma, lo script si rilancia da solo con gli stessi parametri
-    # piu' -Execute -PostDryRun (per saltare la conferma 'SI' duplicata).
+    # Dry-run terminato: invita l'utente a rilanciare lo script e scegliere "2"
+    # dal menu per la cancellazione reale. Niente self-respawn: un solo processo,
+    # un solo log, niente conferme duplicate.
     Write-Host ""
     Write-Host "==============================================================" -ForegroundColor Yellow
-    Write-Host " Vuoi procedere con la CANCELLAZIONE REALE adesso?" -ForegroundColor Yellow
+    Write-Host " DRY-RUN COMPLETATO. Nessun file e' stato modificato." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host " Per eseguire la CANCELLAZIONE REALE:" -ForegroundColor Yellow
+    Write-Host "   1. Rilancia lo script (doppio-click su start.bat)"  -ForegroundColor Yellow
+    Write-Host "   2. Al menu, digita '2' (Esegui cancellazione) e premi INVIO" -ForegroundColor Yellow
     if (-not $NoBackup) {
-        Write-Host " (verra' creato automaticamente il backup completo prima)" -ForegroundColor Yellow
+        Write-Host "   3. Verra' creato automaticamente il backup completo prima" -ForegroundColor Yellow
     } else {
-        Write-Host " (ATTENZIONE: backup DISABILITATO via -NoBackup)" -ForegroundColor Red
+        Write-Host "   3. ATTENZIONE: backup DISABILITATO via -NoBackup" -ForegroundColor Red
     }
     Write-Host "==============================================================" -ForegroundColor Yellow
-    $proceed = Read-Host "Procedere? Scrivere 'SI' (qualsiasi altra risposta termina senza cancellare)"
-    if ($proceed -ceq 'SI') {
-        Write-Log -Rule '---' -Tag 'PROCEED' -Message "Utente ha confermato execute via dry-run preview. Rilancio in modalita' execute."
-        Write-Host ""
-        Write-Host "Rilancio in modalita' EXECUTE..." -ForegroundColor Cyan
-
-        # Costruisci la lista argomenti riportando i parametri originali, senza -Execute,
-        # e aggiungendo -Execute -PostDryRun.
-        $childArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath)
-        foreach ($k in $PSBoundParameters.Keys) {
-            if ($k -eq 'Execute' -or $k -eq 'PostDryRun') { continue }
-            $v = $PSBoundParameters[$k]
-            if ($v -is [switch]) {
-                if ($v.IsPresent) { $childArgs += "-$k" }
-            } else {
-                $childArgs += "-$k", "$v"
-            }
-        }
-        $childArgs += '-Execute'
-        $childArgs += '-PostDryRun'
-
-        & powershell.exe @childArgs
-        $exitCode = $LASTEXITCODE
-        # Il child ha gia' fatto Read-Host finale. Skip del parent per non chiedere INVIO due volte.
-        $skipFinalRead = $true
-    } else {
-        Write-Log -Rule '---' -Tag 'END' -Message "Utente non ha proseguito con execute dopo dry-run."
-        Write-Host "Nessuna cancellazione effettuata. Uscita." -ForegroundColor Cyan
-    }
+    Write-Log -Rule '---' -Tag 'END' -Message "Dry-run completato. Utente deve rilanciare e scegliere '2' per execute."
 }
 
 } catch {
@@ -853,9 +817,7 @@ if ($Execute) {
     Write-Host "==============================================================" -ForegroundColor Red
     $exitCode = 1
 } finally {
-    if (-not $skipFinalRead) {
-        Write-Host ""
-        Read-Host "Premi INVIO per uscire"
-    }
+    Write-Host ""
+    Read-Host "Premi INVIO per uscire"
 }
 exit $exitCode

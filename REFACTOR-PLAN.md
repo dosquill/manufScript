@@ -1,112 +1,69 @@
-# Refactor Single-Process — Piano
+# Refactor Single-Process — Completato
 
 Branch: `refactor/single-process`
-Obiettivo: eliminare la logica self-respawn (parent → child PowerShell) e
-sostituirla con una pipeline single-process orchestrata da funzioni
-riusabili. Riduce overhead startup, unifica log file, elimina problema
-doppio `Read-Host`, migliora leggibilità della main.
+Stato: DONE.
 
-## Stato attuale (main branch)
+## Decisione finale (deviazione dal piano originale)
 
-- Main flow lineare ~600 righe in cui PRE-SCAN, APPLY, POST-SCAN, DIFF,
-  POST-COPY, summary write e banner finale sono inline.
-- Dry-run → prompt "Procedere SI?" → `& powershell.exe @childArgs` con
-  `-Execute -PostDryRun`. Il child è un nuovo processo che fa l'intera
-  pipeline da capo.
-- 2 file di log generati (uno per dry-run, uno per execute child).
-- Parametro interno `[switch]$PostDryRun` necessario per skippare la
-  conferma "SI" nel child.
-- Flag `$skipFinalRead` necessaria per non chiedere `Read-Host` due volte.
+Il piano originale prevedeva estrazione di 8 funzioni (`Invoke-PreScan`,
+`Invoke-Apply`, `Invoke-PostScan`, `Invoke-Diff`, `Invoke-PostCopy`,
+`Write-CleanupSummary`, `Write-FinalBanner`, `Invoke-CleanupRun`) per
+permettere allo script di fare dry-run + execute nello stesso processo.
 
-## Stato target (questo branch)
+L'utente ha scelto una soluzione molto piu' semplice: **eliminare il
+self-respawn e basta**, demandando all'utente il rilancio manuale.
 
-```
-Setup (param, validation, paths, parsing, rulesPlan)
-   │
-   ├─ if (-not $Execute esplicito): menu dry-run/execute/esci
-   │
-   ├─ if (Execute esplicito da CLI): Invoke-CleanupRun -DoExecute
-   │
-   └─ else (dry-run, da menu o default):
-        Invoke-CleanupRun                       # dry-run
-        if (prompt "Procedere SI?"):
-            Invoke-CleanupRun -DoExecute -SkipConfirm
-   ↓
-Exit, un solo Read-Host
-```
+Razionale (chiarezza mentale > automazione):
+- Un solo flusso lineare per run.
+- Niente codice morto da mantenere (orchestrator, reset state, etc).
+- L'utente cliente vede sempre lo stesso menu, sempre nello stesso modo.
+- Niente flag interni (`-PostDryRun`), niente guard di esecuzione
+  (`$skipFinalRead`), niente process spawning.
 
-Un solo processo, un solo file di log con header `[DRY-RUN]` e poi
-`[EXECUTE]` appesi sequenzialmente.
+## Cosa cambia per l'utente
 
-## Funzioni da estrarre
+Prima:
+1. Doppio-click `start.bat`
+2. Menu → `1` (dry-run)
+3. Script mostra anteprima
+4. Prompt: "Procedere SI?" → se SI, child spawn → execute
+5. Read-Host finale del child
 
-| Nuova funzione | Sostituisce blocco | Argomenti chiave |
-|----------------|--------------------|------------------|
-| `Reset-PipelineState` | reset manuale dei counters all'inizio | nessuno |
-| `Invoke-PreScan` | foreach pre-scan + log + Write-Host "Pre-scan" | `$rulesPlan` |
-| `Invoke-Apply` | foreach apply + Write-Progress | `$rulesPlan, $DoExecute` |
-| `Invoke-PostScan` | foreach post-scan + Write-Host "Post-scan" | `$rulesPlan` (solo se DoExecute) |
-| `Invoke-Diff` | Compare-Object + verdict + Write-Host | `$BackupDir, $ManufRoot, $stats.Deleted` |
-| `Invoke-PostCopy` | prompt + Backup-ManufRoot + count check | `$ManufRoot, $PostBackupDir, $NoPostBackup` |
-| `Write-CleanupSummary` | costruzione $sb + AppendAllText | tutti gli stati |
-| `Write-FinalBanner` | banner finale colorato | tutti gli stati |
-| `Invoke-CleanupRun` | orchestra le funzioni sopra | `-DoExecute, -SkipConfirm` |
+Adesso:
+1. Doppio-click `start.bat`
+2. Menu → `1` (dry-run)
+3. Script mostra anteprima
+4. Messaggio: "Per cancellazione reale: rilancia start.bat e premi 2"
+5. Read-Host finale → exit
+6. (Utente rilancia) Doppio-click `start.bat`
+7. Menu → `2` (esegui)
+8. Conferma SI → execute
 
-## Step di implementazione (commit atomici sul branch)
+Un click extra per l'utente, ma flusso lineare e prevedibile.
 
-1. **Aggiungi `Reset-PipelineState`** (no-op a parte azzeramento counters)
-   — niente di rotto, una funzione nuova in più.
-2. **Estrai `Invoke-PreScan`** dal foreach pre-scan, sostituisci nel main
-   con chiamata. Test: dry-run su Manuf di test deve produrre stesso
-   conteggio (5494 file).
-3. **Estrai `Invoke-Apply`** stesso pattern. Test E2E execute.
-4. **Estrai `Invoke-PostScan`** stesso pattern.
-5. **Estrai `Invoke-Diff`** stesso pattern.
-6. **Estrai `Invoke-PostCopy`** stesso pattern.
-7. **Estrai `Write-CleanupSummary`**.
-8. **Estrai `Write-FinalBanner`**.
-9. **Wrappa tutto in `Invoke-CleanupRun -DoExecute -SkipConfirm`**.
-10. **Sostituisci il blocco self-respawn** con chiamata diretta a
-    `Invoke-CleanupRun -DoExecute -SkipConfirm`. Rimuovi param
-    `PostDryRun` (deprecato — non più necessario), rimuovi flag
-    `$skipFinalRead` (non più necessaria perché c'è un solo `Read-Host`).
-11. **Test E2E completo**: dry-run-no, dry-run-SI, execute esplicito,
-    range retention, NoBackup, NoPostBackup. Tutti devono produrre
-    stessi conteggi e stessi verdict del main branch.
+## Modifiche al codice
 
-## Verifiche per ogni step
+| File | Righe | Modifica |
+|------|-------|----------|
+| `Cleanup-Manuf.ps1` | param block | Rimosso `[switch]$PostDryRun` |
+| `Cleanup-Manuf.ps1` | init | Rimosso `$skipFinalRead = $false` + commento |
+| `Cleanup-Manuf.ps1` | Execute confirm (~425) | Rimosso branch `if ($PostDryRun)` |
+| `Cleanup-Manuf.ps1` | Post dry-run (~805) | Sostituito blocco self-respawn (~40 LOC) con messaggio "rilancia, premi 2" (~18 LOC) |
+| `Cleanup-Manuf.ps1` | finally | Rimosso guard `if (-not $skipFinalRead)` |
+
+Diff totale: **-65 righe, +27 righe** (38 LOC nette in meno).
+
+## Verifica
 
 - Parse: `[Parser]::ParseFile()` → no errors
-- Sanity: dry-run su Manuf_template deve dare 5494 file candidati
-- Encoding: log file UTF-16 LE leggibile
-- Single Read-Host: niente doppio prompt finale
-- Single log file: un solo `Logs\cleanup-<ts>.log` per intero ciclo
-  dry-run + execute (se l'utente prosegue)
+- Dry-run su `Data\Manuf` con range 2018-2019: 2330 file candidati,
+  messaggio post-dry-run corretto, un solo Read-Host finale
+- Nessun residuo `PostDryRun` / `skipFinalRead` / `childArgs` /
+  `powershell.exe @` nel file
 
-## Rischi noti
+## Step pianificati MA NON applicati (out of scope)
 
-- Reset state tra dry-run e execute deve essere completo: se manca un
-  contatore i conteggi della seconda run sono sporcati.
-- L'override di `$Execute` dentro la funzione: PowerShell scoping può
-  essere subdolo. Usare `$script:Execute` o passare `[bool]$DoExecute`
-  esplicito ovunque.
-- Banner di startup: 1 volta sola? O 2 (dry-run + execute)? Decisione:
-  1 sola in cima, poi sotto-banner `[ESECUZIONE REALE IN CORSO]` per
-  marcare il secondo giro.
-
-## Out of scope (NON in questo refactor)
-
-- Retention sui backup PRE e POST (deciso skip dall'utente).
-- Read-Host non-interactive (script on-demand, no scheduler).
-- Magic numbers configurabili (`/MT:16`, ecc.).
-- Test path con spazi, UNC, drive di rete.
-
-## Done
-
-Il refactor è completo quando:
-- `Cleanup-Manuf.ps1` ha main flow ≤ 50 righe (oggi ~600)
-- Nessun riferimento a `& powershell.exe @childArgs`
-- Nessun param `PostDryRun`
-- Nessuna variabile `$skipFinalRead`
-- Tutti i test E2E del main branch passano sul branch
-- PR aperta verso `main` con changelog dettagliato
+Le 8 funzioni helper del piano originale non sono state estratte. Se in
+futuro serve far girare dry-run + execute nello stesso processo (es. per
+schedulazione o test E2E), il piano resta valido in git history
+(`git show <commit-iniziale-branch>:REFACTOR-PLAN.md`).
