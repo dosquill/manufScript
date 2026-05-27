@@ -1,5 +1,7 @@
 @echo off
 setlocal
+REM Copyright (c) 2026 Domenico Di Squillante
+REM Licensed under MIT - see LICENSE
 REM ============================================================
 REM   Updater - stile "git pull" sul branch main del repo pubblico.
 REM   1) Chiede a GitHub API qual e' il SHA del commit corrente di main.
