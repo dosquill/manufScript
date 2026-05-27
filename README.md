@@ -45,8 +45,12 @@ Doppio-click su **`start.bat`**. Si apre un menu:
 2. **Esegui cancellazione** — cancella davvero, con backup automatico
 3. **Esci**
 
-Dopo l'anteprima viene chiesto se procedere con la cancellazione vera. Si
-risponde `SI` per confermare o qualsiasi altra cosa per uscire senza modifiche.
+Dopo l'anteprima lo script termina mostrando le istruzioni per eseguire la
+cancellazione vera: **rilanciare** `start.bat` e selezionare l'opzione **`2`**
+dal menu (`Esegui cancellazione`). All'avvio del flusso reale viene chiesta
+una conferma finale: rispondere `SI` per procedere o qualsiasi altra cosa per
+annullare. Il backup pre-cleanup viene creato automaticamente prima della
+cancellazione (a meno che non sia stato disabilitato con `-NoBackup`).
 
 ---
 
